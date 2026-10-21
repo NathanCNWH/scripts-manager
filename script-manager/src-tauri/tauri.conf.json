@@ -1,0 +1,74 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Scripts Manager",
+  "version": "0.1.1",
+  "identifier": "com.wassbe.script-manager",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "脚本管理器",
+        "width": 800,
+        "height": 600,
+        "visible": false,
+        "skipTaskbar": true,
+        "decorations": false,
+        "resizable": true,
+        "dragDropEnabled": true,
+        "minWidth": 640,
+        "minHeight": 420
+      },
+      {
+        "label": "traymenu",
+        "title": "脚本管理器菜单",
+        "width": 230,
+        "height": 195,
+        "visible": false,
+        "skipTaskbar": true,
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "transparent": true,
+        "shadow": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "license": "MIT",
+    "licenseFile": "../../LICENSE",
+    "resources": {
+      "../../LICENSE": "LICENSE",
+      "../../NOTICE": "NOTICE"
+    },
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "集中管理和运行本机脚本的 Windows 托盘工具",
+    "longDescription": "支持脚本与命令的启动、停止、暂停、继续和实时输出，提供中文界面、可移动及缩放的主窗口。",
+    "windows": {
+      "nsis": {
+        "languages": [
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

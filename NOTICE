@@ -1,0 +1,32 @@
+Scripts Manager
+Copyright (c) 2026 Wass B.
+
+Upstream project: https://github.com/WassBe/scripts-manager
+This distribution: https://github.com/NathanCNWH/scripts-manager
+
+This distribution includes local improvements to window controls, script
+entry management and Simplified Chinese interface/documentation.
+The upstream MIT license and copyright notice are preserved in LICENSE.
+
+It is built on the following third-party components, each under its own
+license, unmodified and used as dependencies:
+
+- Tauri (https://tauri.app) — MIT / Apache-2.0
+  Application framework: window shell, tray icon, process bridge.
+- tauri-plugin-dialog — MIT / Apache-2.0
+  Native file picker and confirmation dialogs.
+- tauri-plugin-opener — MIT / Apache-2.0
+  Part of the default Tauri scaffold.
+- tauri-plugin-autostart — MIT / Apache-2.0
+  "Start at login" toggle (registers the app in the Windows Run registry key).
+- React (https://react.dev) — MIT
+  Frontend UI library.
+- Vite (https://vite.dev) — MIT
+  Frontend build tooling.
+- serde / serde_json — MIT / Apache-2.0
+  JSON serialization of the script registry.
+
+The pause/resume feature calls NtSuspendProcess / NtResumeProcess from
+ntdll.dll, part of Microsoft Windows. No Microsoft code is redistributed.
+
+Repetitive and boilerplate tasks assisted by Claude Code (Anthropic).

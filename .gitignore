@@ -1,0 +1,33 @@
+# Personal scripts kept locally, never committed
+/scripts/
+# User configuration, credentials and local backups
+**/scripts.json
+**/scripts.json.*
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.bak
+*.backup
+*.log
+*.pdb
+*.dmp
+
+# Dependencies, generated sources and local build/release artifacts
+**/node_modules/
+**/dist/
+**/dist-ssr/
+**/target/
+**/gen/
+/release/
+/work/
+/outputs/
+
+# Local editor and OS state
+.idea/
+.DS_Store
+Thumbs.db
+*.local

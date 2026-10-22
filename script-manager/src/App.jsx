@@ -452,9 +452,15 @@ function App() {
     return script ? script.name : id;
   }
 
-  /** Selects a script to filter the terminal on, or deselects it to show all output. */
+  /** Opens a script's terminal, switches scripts, or closes the active terminal. */
   function toggleSelection(id) {
-    setSelectedId((current) => (current === id ? null : id));
+    if (showTerminal && selectedId === id) {
+      setShowTerminal(false);
+      setSelectedId(null);
+      return;
+    }
+    setSelectedId(id);
+    setShowTerminal(true);
   }
 
   /** Wraps a row-action handler so it does not change the selection. */
@@ -629,7 +635,7 @@ function App() {
                 const pending = isPendingState(runtime) || busyIds.includes(script.id);
                 const isRunning = runningIds.includes(script.id);
                 const isPaused = pausedIds.includes(script.id);
-                const isSelected = selectedId === script.id;
+                const isSelected = showTerminal && selectedId === script.id;
                 const hasStopAction = Boolean(
                   script.stop && (script.stop.path || script.stop.command),
                 );

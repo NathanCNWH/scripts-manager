@@ -6,7 +6,7 @@
 
 - **界面语言**：简体中文
 - **支持平台**：Windows 10 / 11，x64
-- **当前版本**：0.1.2
+- **当前版本**：0.1.3
 - **技术栈**：Tauri 2、Rust、React 19、Vite 7
 - **许可**：[MIT](LICENSE)，基于 [WassBe/scripts-manager](https://github.com/WassBe/scripts-manager) 的改进版本，保留原作者版权
 
@@ -16,8 +16,8 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `scripts-manager_0.1.2_windows_x64_setup.exe` | 中文安装程序，按向导安装 |
-| `scripts-manager_0.1.2_windows_x64_portable.zip` | 便携程序，解压后运行 `script-manager.exe` |
+| `scripts-manager_0.1.3_windows_x64_setup.exe` | 中文安装程序，按向导安装 |
+| `scripts-manager_0.1.3_windows_x64_portable.zip` | 便携程序，解压后运行 `script-manager.exe` |
 | `SHA256SUMS.txt` | 下载文件的 SHA-256 校验值 |
 
 需要 Microsoft Edge WebView2 运行时。安装版会在缺失时引导安装；便携版需要系统已经安装该运行时。便携版无需安装管理器，但仍将脚本清单保存在用户应用数据目录中。
@@ -42,7 +42,7 @@
 
 1. 点击“导入文件”选择脚本，或点击“添加”填写文件或命令条目。
 2. 点击条目右侧的运行按钮；悬停在图标按钮上可查看中文说明。
-3. 点击底部“终端”查看输出。选中脚本后，在输入框中输入内容并按 Enter 发送。
+3. 点击脚本条目直接打开对应终端；点击其他条目切换输出，再次点击当前条目关闭终端。底部“终端”按钮也可显示或隐藏终端。普通脚本运行时可在输入框中输入内容并按 Enter 发送。
 4. 点击编辑按钮修改条目；右键菜单可以移除条目。移除正在运行的条目前会要求确认并停止该脚本。
 
 编辑运行中的条目时，启动设置在下次运行时生效；停止设置在下次点击停止时读取。

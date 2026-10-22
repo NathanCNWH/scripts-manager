@@ -16,6 +16,7 @@ import {
 } from "./Icons";
 import { getStoredTheme, storeTheme } from "./theme";
 import "./App.css";
+import { isPendingState, isRunningState, statusLabel } from "./runtime";
 
 /** Cap on how many terminal lines are kept in memory. */
 const MAX_LOG_LINES = 500;
@@ -36,6 +37,9 @@ function emptyEntry() {
     stopPath: "",
     stopCommand: "",
     stopShell: "cmd",
+    monitorMode: "process",
+    monitorHost: "127.0.0.1",
+    monitorPort: "",
   };
 }
 
@@ -84,8 +88,10 @@ function appendChunk(lines, id, stream, chunk) {
 /** Root view: script list with run/pause/stop controls and a toggleable output terminal. */
 function App() {
   const [scripts, setScripts] = useState([]);
-  const [runningIds, setRunningIds] = useState([]);
-  const [pausedIds, setPausedIds] = useState([]);
+  const [runtimeStates, setRuntimeStates] = useState([]);
+  const [busyIds, setBusyIds] = useState([]);
+  const runningIds = runtimeStates.filter(isRunningState).map((entry) => entry.id);
+  const pausedIds = runtimeStates.filter((entry) => entry.status === "paused").map((entry) => entry.id);
   const [logLines, setLogLines] = useState([]);
   const [showTerminal, setShowTerminal] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
@@ -103,12 +109,26 @@ function App() {
   const inputRef = useRef(null);
   const contentRef = useRef(null);
 
+  async function refreshStates() {
+    setRuntimeStates(await invoke("get_script_states"));
+  }
+
+  function runtimeFor(script) {
+    return runtimeStates.find((entry) => entry.id === script?.id) || {
+      status: script?.monitor ? "checking" : "stopped",
+      monitored: Boolean(script?.monitor),
+      can_stop: Boolean(script?.stop),
+      message: "",
+    };
+  }
+
   useEffect(() => {
     function refreshScripts() {
       invoke("get_scripts")
         .then((entries) => {
           setScripts(entries);
           setConfigError("");
+          return refreshStates();
         })
         .catch((message) => setConfigError(String(message)));
     }
@@ -117,12 +137,7 @@ function App() {
       .then(setConfigPath)
       .catch((message) => setConfigError(String(message)));
     const refreshTimer = window.setInterval(refreshScripts, 2000);
-    invoke("get_running_scripts").then((entries) => {
-      setRunningIds(entries.map((entry) => entry.id));
-      setPausedIds(
-        entries.filter((entry) => entry.paused).map((entry) => entry.id)
-      );
-    });
+    const unlistenStates = listen("script-states", (event) => setRuntimeStates(event.payload));
 
     const unlistenOutput = listen("script-output", (event) => {
       const { id, stream, chunk } = event.payload;
@@ -131,17 +146,17 @@ function App() {
     });
 
     const unlistenExited = listen("script-exited", (event) => {
-      const { id, code } = event.payload;
-
-      setRunningIds((ids) => ids.filter((runningId) => runningId !== id));
-      setPausedIds((ids) => ids.filter((pausedId) => pausedId !== id));
+      const { id, code, monitored } = event.payload;
+      refreshStates().catch((message) => setConfigError(String(message)));
       setLogLines((lines) =>
         [
           ...lines,
           {
             id,
             stream: "info",
-            line: `[进程已退出，退出码：${code ?? "未知"}]`,
+            line: monitored
+              ? `[启动脚本已结束，退出码：${code ?? "未知"}；继续检测服务端口]`
+              : `[进程已退出，退出码：${code ?? "未知"}]`,
             open: false,
           },
         ].slice(-MAX_LOG_LINES)
@@ -167,6 +182,7 @@ function App() {
 
     return () => {
       unlistenOutput.then((unlisten) => unlisten());
+      unlistenStates.then((unlisten) => unlisten());
       unlistenExited.then((unlisten) => unlisten());
       unlistenDragEnter.then((unlisten) => unlisten());
       unlistenDragLeave.then((unlisten) => unlisten());
@@ -295,6 +311,9 @@ function App() {
       stopPath: script.stop?.path || "",
       stopCommand: script.stop?.command || "",
       stopShell: script.stop?.shell || "cmd",
+      monitorMode: script.monitor ? "tcp" : "process",
+      monitorHost: script.monitor?.host || "127.0.0.1",
+      monitorPort: script.monitor ? String(script.monitor.port) : "",
     });
     setEditingId(id);
     setShowAddForm(true);
@@ -319,6 +338,9 @@ function App() {
       command: draft.mode === "command" ? draft.command : "",
       shell: draft.mode === "command" ? draft.shell : "",
       working_dir: draft.working_dir,
+      monitor: draft.monitorMode === "tcp"
+        ? { kind: "tcp", host: draft.monitorHost, port: Number(draft.monitorPort) }
+        : null,
       stop: draft.stopMode === "none"
         ? null
         : {
@@ -331,6 +353,7 @@ function App() {
       const command = editingId ? "update_entry" : "add_entry";
       const args = editingId ? { id: editingId, entry } : { entry };
       setScripts(await invoke(command, args));
+      await refreshStates();
       cancelEntry();
     } catch (message) {
       setError(String(message));
@@ -376,54 +399,40 @@ function App() {
 
   /** Starts a script and marks it as running. */
   async function startScript(id) {
-    setError("");
-
-    try {
-      await invoke("start_script", { id });
-      setRunningIds((ids) => [...ids, id]);
-    } catch (message) {
-      setError(String(message));
-    }
+    await controlScript("start_script", id);
   }
 
   /** Stops a managed process or directly invokes its configured stop action. */
   async function stopScript(id) {
-    setError("");
-
-    try {
-      await invoke("stop_script", { id });
-    } catch (message) {
-      setError(String(message));
-    }
+    await controlScript("stop_script", id);
   }
 
   /** Freezes a running script's process. */
   async function pauseScript(id) {
-    setError("");
-
-    try {
-      await invoke("pause_script", { id });
-      setPausedIds((ids) => [...ids, id]);
-    } catch (message) {
-      setError(String(message));
-    }
+    await controlScript("pause_script", id);
   }
 
   /** Unfreezes a paused script's process. */
   async function resumeScript(id) {
-    setError("");
+    await controlScript("resume_script", id);
+  }
 
+  async function controlScript(command, id) {
+    setError("");
+    setBusyIds((ids) => [...ids, id]);
     try {
-      await invoke("resume_script", { id });
-      setPausedIds((ids) => ids.filter((pausedId) => pausedId !== id));
+      await invoke(command, { id });
     } catch (message) {
       setError(String(message));
+    } finally {
+      try { await refreshStates(); } catch (message) { setConfigError(String(message)); }
+      setBusyIds((ids) => ids.filter((item) => item !== id));
     }
   }
 
   /** Sends the typed line to the selected running script's stdin. */
   async function sendInput() {
-    if (!selectedId || !inputText) {
+    if (!selectedId || !inputText || scripts.find((script) => script.id === selectedId)?.monitor) {
       return;
     }
 
@@ -552,11 +561,30 @@ function App() {
               </label>
               <label className="entry-label">停止操作（可选）
                 <select value={draft.stopMode} onChange={(event) => setDraft((current) => ({ ...current, stopMode: event.target.value }))}>
-                  <option value="none">结束进程树</option>
+                  <option value="none">{draft.monitorMode === "tcp" ? "未配置停止操作（停止按钮禁用）" : "结束进程树"}</option>
                   <option value="file">运行停止文件，必要时结束进程树</option>
                   <option value="command">运行停止命令，必要时结束进程树</option>
                 </select>
               </label>
+              <label className="entry-label">运行状态检测
+                <select value={draft.monitorMode} onChange={(event) => setDraft((current) => ({ ...current, monitorMode: event.target.value }))}>
+                  <option value="process">跟踪启动进程</option>
+                  <option value="tcp">TCP 端口检测（后台服务）</option>
+                </select>
+              </label>
+              {draft.monitorMode === "tcp" && (
+                <>
+                  <label className="entry-label">检测地址
+                    <input value={draft.monitorHost} required placeholder="127.0.0.1"
+                      onChange={(event) => setDraft((current) => ({ ...current, monitorHost: event.target.value }))} />
+                  </label>
+                  <label className="entry-label">检测端口
+                    <input type="number" min="1" max="65535" step="1" required value={draft.monitorPort} placeholder="8080"
+                      onChange={(event) => setDraft((current) => ({ ...current, monitorPort: event.target.value }))} />
+                  </label>
+                  <p className="entry-form-hint">自动检测端口，本机状态通常在 2–5 秒内更新。端口可连接表示运行，不代表应用健康。后台服务需要配置停止文件或命令；不支持暂停和标准输入。</p>
+                </>
+              )}
               {draft.stopMode === "file" && (
                 <label className="entry-label">停止文件
                   <div className="entry-path-row">
@@ -597,6 +625,8 @@ function App() {
           ) : (
             <ul className="script-list">
               {scripts.map((script) => {
+                const runtime = runtimeFor(script);
+                const pending = isPendingState(runtime) || busyIds.includes(script.id);
                 const isRunning = runningIds.includes(script.id);
                 const isPaused = pausedIds.includes(script.id);
                 const isSelected = selectedId === script.id;
@@ -604,16 +634,8 @@ function App() {
                   script.stop && (script.stop.path || script.stop.command),
                 );
 
-                const statusClass = isPaused
-                  ? "paused"
-                  : isRunning
-                    ? "running"
-                    : "";
-                const statusTitle = isPaused
-                  ? "已暂停"
-                  : isRunning
-                    ? "运行中"
-                    : "已停止";
+                const statusClass = runtime.status;
+                const statusTitle = statusLabel(runtime.status);
 
                 return (
                   <li
@@ -639,6 +661,10 @@ function App() {
                       <span className="script-path" title={script.mode === "command" ? script.command : script.path}>
                         {script.mode === "command" ? `${script.shell}: ${script.command}` : script.path}
                       </span>
+                      {script.monitor && <span className={`script-monitor-status ${runtime.status}`} title={runtime.message}>
+                        TCP {script.monitor.host}:{script.monitor.port} · {statusTitle}
+                        {runtime.status === "error" && runtime.message ? `：${runtime.message}` : ""}
+                      </span>}
                     </div>
                     <div className="script-actions">
                       <button
@@ -649,7 +675,7 @@ function App() {
                       >
                         <EditIcon size={14} />
                       </button>
-                      {isRunning && !isPaused && (
+                      {isRunning && !isPaused && !script.monitor && (
                         <button
                           className="icon-button pause"
                           onClick={rowAction(pauseScript, script.id)}
@@ -659,7 +685,7 @@ function App() {
                           <PauseIcon size={14} />
                         </button>
                       )}
-                      {isRunning && isPaused && (
+                      {isRunning && isPaused && !script.monitor && (
                         <button
                           className="icon-button pause"
                           onClick={rowAction(resumeScript, script.id)}
@@ -672,6 +698,7 @@ function App() {
                       {!isRunning && (
                         <button
                           className="icon-button run"
+                          disabled={pending}
                           onClick={rowAction(startScript, script.id)}
                           aria-label={`运行 ${script.name}`}
                           title="运行"
@@ -682,9 +709,10 @@ function App() {
                       {(isRunning || hasStopAction) && (
                         <button
                           className="icon-button stop"
+                          disabled={pending || (Boolean(script.monitor) && !hasStopAction)}
                           onClick={rowAction(stopScript, script.id)}
                           aria-label={`停止 ${script.name}`}
-                          title={isRunning ? "停止" : "执行停止操作"}
+                          title={script.monitor && !hasStopAction ? "请先配置停止操作" : isRunning ? "停止" : "执行停止操作"}
                         >
                           <StopIcon size={14} />
                         </button>
@@ -745,9 +773,11 @@ function App() {
                 className="terminal-input"
                 type="text"
                 value={inputText}
-                disabled={!selectedId || !runningIds.includes(selectedId)}
+                disabled={!selectedId || !runningIds.includes(selectedId) || Boolean(scripts.find((script) => script.id === selectedId)?.monitor)}
                 placeholder={
-                  !selectedId
+                  scripts.find((script) => script.id === selectedId)?.monitor
+                    ? "端口检测服务不支持标准输入"
+                    : !selectedId
                     ? "选择脚本后可发送输入"
                     : !runningIds.includes(selectedId)
                       ? `${scriptName(selectedId)} 未运行`
@@ -788,6 +818,8 @@ function App() {
           const contextScript = scripts.find(
             (script) => script.id === contextMenu.id,
           );
+          const runtime = runtimeFor(contextScript);
+          const pending = isPendingState(runtime) || busyIds.includes(contextMenu.id);
           const hasStopAction = Boolean(
             contextScript?.stop &&
               (contextScript.stop.path || contextScript.stop.command),
@@ -810,12 +842,13 @@ function App() {
                 <button
                   className="context-menu-item"
                   onClick={menuAction(startScript)}
+                  disabled={pending}
                 >
                   <PlayIcon size={13} />
                   运行
                 </button>
               )}
-              {isRunning && !isPaused && (
+              {isRunning && !isPaused && !contextScript?.monitor && (
                 <button
                   className="context-menu-item"
                   onClick={menuAction(pauseScript)}
@@ -824,7 +857,7 @@ function App() {
                   暂停
                 </button>
               )}
-              {isRunning && isPaused && (
+              {isRunning && isPaused && !contextScript?.monitor && (
                 <button
                   className="context-menu-item"
                   onClick={menuAction(resumeScript)}
@@ -837,6 +870,7 @@ function App() {
                 <button
                   className="context-menu-item"
                   onClick={menuAction(stopScript)}
+                  disabled={pending || (Boolean(contextScript?.monitor) && !hasStopAction)}
                 >
                   <StopIcon size={13} />
                   {isRunning ? "停止" : "执行停止操作"}
@@ -853,6 +887,7 @@ function App() {
               <button
                 className="context-menu-item danger"
                 onClick={menuAction(removeScript)}
+                disabled={pending}
               >
                 <TrashIcon size={13} />
                 移除

@@ -299,6 +299,12 @@
   color: var(--green);
 }
 
+.icon-button:disabled { opacity: 0.4; cursor: not-allowed; }
+.status-dot.starting, .status-dot.stopping, .status-dot.checking { background-color: var(--orange); }
+.status-dot.error { background-color: var(--red); }
+.script-monitor-status { font-size: 0.7em; color: var(--text-muted); overflow-wrap: anywhere; }
+.script-monitor-status.error { color: var(--red); }
+
 .icon-button.edit {
   color: var(--text-muted);
 }

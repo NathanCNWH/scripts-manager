@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Scripts Manager",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.wassbe.script-manager",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -61,7 +61,7 @@
       "icons/icon.ico"
     ],
     "shortDescription": "集中管理和运行本机脚本的 Windows 托盘工具",
-    "longDescription": "支持脚本与命令的启动、停止、暂停、继续和实时输出，提供中文界面、可移动及缩放的主窗口。",
+    "longDescription": "支持脚本与命令的运行、实时输出和自定义停止操作，支持后台服务的 TCP 端口状态检测，提供中文界面及可移动、缩放的主窗口。",
     "windows": {
       "nsis": {
         "languages": [

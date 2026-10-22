@@ -50,6 +50,8 @@ pub struct Script {
     pub working_dir: String,
     #[serde(default)]
     pub stop: Option<StopAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor: Option<crate::monitor::PortMonitor>,
 }
 
 #[derive(Default)]
@@ -130,6 +132,9 @@ fn normalize_script(script: &mut Script, require_file: bool) -> Result<(), Strin
     script.command = script.command.trim().to_string();
     script.shell = script.shell.trim().to_lowercase();
     script.working_dir = script.working_dir.trim().to_string();
+    if let Some(monitor) = script.monitor.as_mut() {
+        monitor.normalize()?;
+    }
 
     match script.mode.as_str() {
         "file" => {
@@ -183,7 +188,7 @@ fn normalize_script(script: &mut Script, require_file: bool) -> Result<(), Strin
     Ok(())
 }
 
-fn read_scripts(app: &tauri::AppHandle) -> Result<Vec<Script>, String> {
+pub(crate) fn read_scripts(app: &tauri::AppHandle) -> Result<Vec<Script>, String> {
     let file = ensure_registry_file(app)?;
     let content = fs::read_to_string(&file).map_err(|error| error.to_string())?;
     let mut scripts: Vec<Script> = serde_json::from_str(&content)
@@ -328,6 +333,7 @@ pub fn add_script(
             shell: String::new(),
             working_dir: String::new(),
             stop: None,
+            monitor: None,
         },
         app,
         state,

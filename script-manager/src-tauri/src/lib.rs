@@ -1,3 +1,4 @@
+mod monitor;
 mod runner;
 mod scripts;
 
@@ -132,6 +133,7 @@ pub fn run() {
             runner::resume_script,
             runner::send_input,
             runner::get_running_scripts,
+            monitor::get_script_states,
             toggle_main,
             quit_app
         ])
@@ -139,11 +141,13 @@ pub fn run() {
             let loaded = scripts::load_scripts(app.handle());
             app.manage(scripts::ScriptRegistry(Mutex::new(loaded)));
             app.manage(runner::RunningScripts::default());
+            app.manage(monitor::PortStates::default());
 
             if let Some(window) = app.get_webview_window("main") {
                 position_bottom_right(&window);
             }
             setup_tray(app)?;
+            monitor::start_worker(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

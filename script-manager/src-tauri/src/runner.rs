@@ -96,8 +96,8 @@ pub struct RunningScripts(pub Arc<Mutex<HashMap<String, RunningScript>>>);
 /// Running-state snapshot sent to the UI on initialization.
 #[derive(Clone, Serialize)]
 pub struct RunningInfo {
-    id: String,
-    paused: bool,
+    pub id: String,
+    pub paused: bool,
 }
 
 /// A chunk of output produced by a running script. Chunks are not
@@ -114,6 +114,7 @@ struct OutputChunk {
 struct ExitedEvent {
     id: String,
     code: Option<i32>,
+    monitored: bool,
 }
 
 /// Builds the command to launch a script, chosen by its file extension.
@@ -276,18 +277,35 @@ fn watch_exit(
             }
             Ok(Some(status)) => {
                 map.remove(&id);
+                crate::monitor::launcher_finished(&app, &id, status.success());
+                let monitored = crate::scripts::find_script(&app, &id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|script| script.monitor.is_some());
                 let _ = app.emit(
                     "script-exited",
                     ExitedEvent {
                         id,
                         code: status.code(),
+                        monitored,
                     },
                 );
                 return;
             }
             Err(_) => {
                 map.remove(&id);
-                let _ = app.emit("script-exited", ExitedEvent { id, code: None });
+                let monitored = crate::scripts::find_script(&app, &id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|script| script.monitor.is_some());
+                let _ = app.emit(
+                    "script-exited",
+                    ExitedEvent {
+                        id,
+                        code: None,
+                        monitored,
+                    },
+                );
                 return;
             }
         }
@@ -296,16 +314,34 @@ fn watch_exit(
 
 /// Starts a registered file or shell command.
 #[tauri::command]
-pub fn start_script(
+pub async fn start_script(
     id: String,
     app: tauri::AppHandle,
-    registry: tauri::State<ScriptRegistry>,
-    running: tauri::State<RunningScripts>,
+    registry: tauri::State<'_, ScriptRegistry>,
+    running: tauri::State<'_, RunningScripts>,
 ) -> Result<(), String> {
     let script = crate::scripts::get_scripts(app.clone(), registry)?
         .into_iter()
         .find(|script| script.id == id)
         .ok_or("未知脚本。")?;
+
+    if running.0.lock().unwrap().contains_key(&id) {
+        return Err("此脚本已在运行。".into());
+    }
+    if let Some(config) = &script.monitor {
+        crate::monitor::begin_start(&app, &id, config)?;
+        let config = config.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || crate::monitor::probe(&config))
+            .await
+            .map_err(|error| error.to_string());
+        match result {
+            Ok(result) => crate::monitor::accept_start_probe(&app, &id, result)?,
+            Err(message) => {
+                crate::monitor::operation_failed(&app, &id, &message);
+                return Err(message);
+            }
+        }
+    }
 
     let mut map = running.0.lock().unwrap();
 
@@ -313,7 +349,10 @@ pub fn start_script(
         return Err("此脚本已在运行。".into());
     }
 
-    let mut command = start_command(&script)?;
+    let mut command = start_command(&script).map_err(|message| {
+        crate::monitor::operation_failed(&app, &id, &message);
+        message
+    })?;
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -322,9 +361,11 @@ pub fn start_script(
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
 
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("启动脚本失败：{error}"))?;
+    let mut child = command.spawn().map_err(|error| {
+        let message = format!("启动脚本失败：{error}");
+        crate::monitor::operation_failed(&app, &id, &message);
+        message
+    })?;
 
     if let Some(stdout) = child.stdout.take() {
         stream_output(app.clone(), id.clone(), "stdout", stdout);
@@ -471,7 +512,7 @@ fn stop_managed(
 }
 
 /// Stops a managed process, running its optional stop action first.
-pub async fn stop_if_running(
+async fn stop_managed_if_running(
     id: &str,
     app: &tauri::AppHandle,
     running: &RunningScripts,
@@ -515,6 +556,59 @@ pub async fn stop_if_running(
     result
 }
 
+async fn stop_port_service(
+    script: crate::scripts::Script,
+    app: &tauri::AppHandle,
+    running: &RunningScripts,
+) -> Result<(), String> {
+    let config = script.monitor.clone().ok_or("此条目未配置端口检测。")?;
+    let stop = script
+        .stop
+        .clone()
+        .ok_or("端口检测条目需要配置停止操作，才能停止后台服务。")?;
+    crate::monitor::begin_stop(app, &script.id, &config)?;
+    let result = if running.0.lock().unwrap().contains_key(&script.id) {
+        stop_managed_if_running(&script.id, app, running).await
+    } else {
+        let working_dir = script.working_dir.clone();
+        tauri::async_runtime::spawn_blocking(move || run_stop_action(&stop, &working_dir, 0))
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|result| result)
+    };
+    if let Err(message) = result {
+        crate::monitor::operation_failed(app, &script.id, &message);
+        return Err(message);
+    }
+    let app = app.clone();
+    let id = script.id;
+    tauri::async_runtime::spawn_blocking(move || crate::monitor::wait_stopped(&app, &id, &config))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// Removal waits for a monitored service to stop before forgetting its entry.
+pub async fn stop_if_running(
+    id: &str,
+    app: &tauri::AppHandle,
+    running: &RunningScripts,
+) -> Result<(), String> {
+    if let Some(script) = crate::scripts::find_script(app, id)? {
+        if let Some(config) = script.monitor.clone() {
+            let result =
+                tauri::async_runtime::spawn_blocking(move || crate::monitor::probe(&config))
+                    .await
+                    .map_err(|error| error.to_string())?;
+            if result != crate::monitor::Probe::Closed || running.0.lock().unwrap().contains_key(id)
+            {
+                return stop_port_service(script, app, running).await;
+            }
+            return Ok(());
+        }
+    }
+    stop_managed_if_running(id, app, running).await
+}
+
 /// Stops a managed script. If the script was started outside this app, its
 /// configured stop action can still be invoked directly.
 #[tauri::command]
@@ -523,8 +617,12 @@ pub async fn stop_script(
     app: tauri::AppHandle,
     running: tauri::State<'_, RunningScripts>,
 ) -> Result<(), String> {
+    let script = crate::scripts::find_script(&app, &id)?.ok_or("未找到脚本。")?;
+    if script.monitor.is_some() {
+        return stop_port_service(script, &app, &running).await;
+    }
     if running.0.lock().unwrap().contains_key(&id) {
-        return stop_if_running(&id, &app, &running).await;
+        return stop_managed_if_running(&id, &app, &running).await;
     }
 
     let script =
@@ -551,7 +649,13 @@ pub async fn stop_all_scripts(
     app: tauri::AppHandle,
     running: tauri::State<'_, RunningScripts>,
 ) -> Result<(), String> {
-    let ids: Vec<String> = running.0.lock().unwrap().keys().cloned().collect();
+    let mut ids: std::collections::HashSet<String> =
+        running.0.lock().unwrap().keys().cloned().collect();
+    for info in crate::monitor::get_script_states(app.clone()) {
+        if info.monitored && info.status == "running" && info.can_stop {
+            ids.insert(info.id);
+        }
+    }
     let mut errors = Vec::new();
     for id in ids {
         if let Err(error) = stop_if_running(&id, &app, &running).await {
@@ -574,6 +678,7 @@ pub fn send_input(
     app: tauri::AppHandle,
     running: tauri::State<RunningScripts>,
 ) -> Result<(), String> {
+    ensure_process_controls(&app, &id)?;
     let mut map = running.0.lock().unwrap();
 
     let entry = map.get_mut(&id).ok_or("此脚本未运行。")?;
@@ -597,7 +702,12 @@ pub fn send_input(
 
 /// Freezes a running script's process until it is resumed or stopped.
 #[tauri::command]
-pub fn pause_script(id: String, running: tauri::State<RunningScripts>) -> Result<(), String> {
+pub fn pause_script(
+    id: String,
+    app: tauri::AppHandle,
+    running: tauri::State<RunningScripts>,
+) -> Result<(), String> {
+    ensure_process_controls(&app, &id)?;
     let mut map = running.0.lock().unwrap();
 
     let entry = map.get_mut(&id).ok_or("此脚本未运行。")?;
@@ -614,7 +724,12 @@ pub fn pause_script(id: String, running: tauri::State<RunningScripts>) -> Result
 
 /// Resumes a paused script's process.
 #[tauri::command]
-pub fn resume_script(id: String, running: tauri::State<RunningScripts>) -> Result<(), String> {
+pub fn resume_script(
+    id: String,
+    app: tauri::AppHandle,
+    running: tauri::State<RunningScripts>,
+) -> Result<(), String> {
+    ensure_process_controls(&app, &id)?;
     let mut map = running.0.lock().unwrap();
 
     let entry = map.get_mut(&id).ok_or("此脚本未运行。")?;
@@ -629,7 +744,15 @@ pub fn resume_script(id: String, running: tauri::State<RunningScripts>) -> Resul
     Ok(())
 }
 
-/// Returns the running state of every managed script (for UI initialization).
+/// Prevent controls from targeting a launcher instead of its detached service.
+fn ensure_process_controls(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
+    if crate::scripts::find_script(app, id)?.is_some_and(|script| script.monitor.is_some()) {
+        return Err("端口检测条目不支持暂停、继续或标准输入。".into());
+    }
+    Ok(())
+}
+
+/// Returns directly managed processes; service status is reported separately.
 #[tauri::command]
 pub fn get_running_scripts(running: tauri::State<RunningScripts>) -> Vec<RunningInfo> {
     running

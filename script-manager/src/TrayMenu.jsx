@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   disable,
@@ -10,27 +11,33 @@ import { CheckIcon, StopIcon, TerminalIcon, XIcon } from "./Icons";
 import { applyTheme, getStoredTheme } from "./theme";
 import logo from "./assets/logo.png";
 import "./TrayMenu.css";
+import { isRunningState } from "./runtime";
 
 /** Custom tray context menu rendered in its own popup window, styled like the main app. */
 function TrayMenu() {
   const [runningCount, setRunningCount] = useState(0);
+  const [stoppableCount, setStoppableCount] = useState(0);
   const [autostart, setAutostart] = useState(false);
 
   useEffect(() => {
     const menuWindow = getCurrentWindow();
 
-    invoke("get_running_scripts").then((entries) =>
-      setRunningCount(entries.length)
-    );
+    function updateCounts(entries) {
+      setRunningCount(entries.filter(isRunningState).length);
+      setStoppableCount(entries.filter((entry) => isRunningState(entry) && entry.can_stop && entry.status !== "stopping").length);
+    }
+    function refreshCounts() {
+      return invoke("get_script_states").then(updateCounts);
+    }
+    refreshCounts();
+    const unlistenStates = listen("script-states", (event) => updateCounts(event.payload));
     isEnabled().then(setAutostart);
 
     // Refresh the running count and theme each time the menu is opened.
     const unlistenFocus = menuWindow.onFocusChanged(({ payload: focused }) => {
       if (focused) {
         applyTheme(getStoredTheme());
-        invoke("get_running_scripts").then((entries) =>
-          setRunningCount(entries.length)
-        );
+        refreshCounts();
         isEnabled().then(setAutostart);
       }
     });
@@ -46,6 +53,7 @@ function TrayMenu() {
 
     return () => {
       unlistenFocus.then((stop) => stop());
+      unlistenStates.then((stop) => stop());
       window.removeEventListener("storage", handleStorage);
     };
   }, []);
@@ -97,7 +105,7 @@ function TrayMenu() {
 
       <button
         className="tray-menu-item"
-        disabled={runningCount === 0}
+        disabled={stoppableCount === 0}
         onClick={() => runAction(() => invoke("stop_all_scripts"))}
       >
         <StopIcon size={14} />

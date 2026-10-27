@@ -105,6 +105,8 @@ function App() {
   const [draft, setDraft] = useState(emptyEntry);
   const [configPath, setConfigPath] = useState("");
   const [configError, setConfigError] = useState("");
+  const [autostartErrors, setAutostartErrors] = useState([]);
+  const [savingAutostartIds, setSavingAutostartIds] = useState([]);
   const terminalRef = useRef(null);
   const inputRef = useRef(null);
   const contentRef = useRef(null);
@@ -124,6 +126,9 @@ function App() {
 
   useEffect(() => {
     function refreshScripts() {
+      invoke("get_autostart_errors")
+        .then(setAutostartErrors)
+        .catch((message) => setError(String(message)));
       invoke("get_scripts")
         .then((entries) => {
           setScripts(entries);
@@ -397,6 +402,22 @@ function App() {
     }
   }
 
+  /** Saves the next-launch preference without starting or stopping the project. */
+  async function toggleProjectAutostart(script) {
+    setError("");
+    setSavingAutostartIds((ids) => [...ids, script.id]);
+    try {
+      setScripts(await invoke("set_script_autostart", {
+        id: script.id,
+        enabled: !script.autostart,
+      }));
+    } catch (message) {
+      setError(`保存自启动设置失败：${message}`);
+    } finally {
+      setSavingAutostartIds((ids) => ids.filter((id) => id !== script.id));
+    }
+  }
+
   /** Starts a script and marks it as running. */
   async function startScript(id) {
     await controlScript("start_script", id);
@@ -518,6 +539,12 @@ function App() {
 
           {error && <p className="error-message">{error}</p>}
           {configError && <p className="error-message">{configError}</p>}
+          {autostartErrors.length > 0 && <p className="error-message" role="alert">
+            本次管理器启动时，以下项目自启动失败：
+            {autostartErrors.map((entry) => (
+              <span className="autostart-error" key={entry.id}>{entry.name}：{entry.message}</span>
+            ))}
+          </p>}
           {configPath && <p className="config-path" title={configPath}>配置文件：{configPath}</p>}
 
           {showAddForm && (
@@ -673,6 +700,22 @@ function App() {
                       </span>}
                     </div>
                     <div className="script-actions">
+                      <button
+                        className={`autostart-switch ${script.autostart ? "enabled" : ""}`}
+                        type="button"
+                        role="switch"
+                        aria-checked={Boolean(script.autostart)}
+                        aria-label={`${script.name} 随管理器自启动`}
+                        title="随管理器下次启动自动运行；切换不会立即启停项目"
+                        disabled={savingAutostartIds.includes(script.id)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleProjectAutostart(script);
+                        }}
+                      >
+                        <span className="autostart-track" aria-hidden="true" />
+                        自启动
+                      </button>
                       <button
                         className="icon-button edit"
                         onClick={rowAction(beginEdit, script.id)}

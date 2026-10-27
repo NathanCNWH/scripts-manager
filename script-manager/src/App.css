@@ -278,9 +278,54 @@
 
 .script-actions {
   display: flex;
+  align-items: center;
   gap: 4px;
   flex-shrink: 0;
 }
+
+.autostart-switch {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 5px;
+  height: 30px;
+  margin-right: 4px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 0.72em;
+  white-space: nowrap;
+}
+
+.autostart-track {
+  position: relative;
+  width: 25px;
+  height: 14px;
+  border-radius: 8px;
+  background: var(--text-muted);
+}
+
+.autostart-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--bg);
+  transition: transform 0.15s;
+}
+
+.autostart-switch.enabled { color: var(--text); }
+.autostart-switch.enabled .autostart-track { background: var(--green); }
+.autostart-switch.enabled .autostart-track::after { transform: translateX(11px); }
+.autostart-switch:hover { background: var(--bg-hover); }
+.autostart-switch:disabled { opacity: 0.5; cursor: wait; }
+.autostart-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.autostart-error { display: block; margin-top: 4px; }
 
 .icon-button {
   display: flex;

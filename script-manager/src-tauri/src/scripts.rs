@@ -52,6 +52,8 @@ pub struct Script {
     pub stop: Option<StopAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub monitor: Option<crate::monitor::PortMonitor>,
+    #[serde(default)]
+    pub autostart: bool,
 }
 
 #[derive(Default)]
@@ -311,8 +313,47 @@ pub fn update_entry(
         return Err("其他条目已使用此文件。".into());
     }
 
+    // This setting is managed by the row switch; editing other fields must
+    // preserve its latest on-disk value, including while the editor is open.
+    entry.autostart = scripts[index].autostart;
     scripts[index] = entry;
     save_scripts(&app, &scripts)?;
+    *current = scripts.clone();
+    Ok(scripts)
+}
+
+fn with_autostart(content: &str, id: &str, enabled: bool) -> Result<String, String> {
+    let mut entries: Vec<serde_json::Value> =
+        serde_json::from_str(content).map_err(|error| error.to_string())?;
+    let entry = entries
+        .iter_mut()
+        .find(|entry| entry["id"].as_str().is_some_and(|value| value.trim() == id))
+        .ok_or("此条目已不存在。")?;
+    entry["autostart"] = enabled.into();
+    serde_json::to_string_pretty(&entries)
+        .map(|content| format!("{content}\n"))
+        .map_err(|error| error.to_string())
+}
+
+/// Change only the requested flag, retaining unrelated and unknown JSON fields.
+#[tauri::command]
+pub fn set_script_autostart(
+    id: String,
+    enabled: bool,
+    app: tauri::AppHandle,
+    state: tauri::State<ScriptRegistry>,
+) -> Result<Vec<Script>, String> {
+    let mut current = state.0.lock().unwrap();
+    let mut scripts = read_scripts(&app)?;
+    let script = scripts
+        .iter_mut()
+        .find(|script| script.id == id)
+        .ok_or("此条目已不存在。")?;
+    let file = registry_file(&app)?;
+    let content = fs::read_to_string(&file).map_err(|error| error.to_string())?;
+    let content = with_autostart(&content, &id, enabled)?;
+    fs::write(file, content).map_err(|error| error.to_string())?;
+    script.autostart = enabled;
     *current = scripts.clone();
     Ok(scripts)
 }
@@ -334,6 +375,7 @@ pub fn add_script(
             working_dir: String::new(),
             stop: None,
             monitor: None,
+            autostart: false,
         },
         app,
         state,
@@ -354,4 +396,39 @@ pub async fn remove_script(
     save_scripts(&app, &scripts)?;
     *current = scripts.clone();
     Ok(scripts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn legacy_entries_do_not_autostart() {
+        let script: Script = serde_json::from_value(json!({
+            "id": "legacy", "name": "demo", "path": "example.cmd"
+        }))
+        .unwrap();
+        assert!(!script.autostart);
+    }
+
+    #[test]
+    fn toggling_preserves_every_other_field_and_entry() {
+        let original = json!([
+            {"id": "selected", "name": "demo", "command": "echo hello", "shell": "cmd",
+             "working_dir": "C:\\example", "stop": {"command": "echo stop", "shell": "cmd"},
+             "monitor": {"kind": "tcp", "host": "127.0.0.1", "port": 8080},
+             "custom": {"keep": true}},
+            {"id": "other", "path": "other.cmd", "custom": [1, 2]}
+        ]);
+        let enabled = with_autostart(&original.to_string(), "selected", true).unwrap();
+        let mut expected = original.clone();
+        expected[0]["autostart"] = true.into();
+        assert_eq!(serde_json::from_str::<Value>(&enabled).unwrap(), expected);
+
+        let disabled = with_autostart(&enabled, "selected", false).unwrap();
+        expected[0]["autostart"] = false.into();
+        assert_eq!(serde_json::from_str::<Value>(&disabled).unwrap(), expected);
+        assert!(with_autostart(&enabled, "missing", true).is_err());
+    }
 }

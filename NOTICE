@@ -19,6 +19,8 @@ license, unmodified and used as dependencies:
   Part of the default Tauri scaffold.
 - tauri-plugin-autostart — MIT / Apache-2.0
   "Start at login" toggle (registers the app in the Windows Run registry key).
+- tauri-plugin-single-instance — MIT / Apache-2.0
+  Prevents duplicate manager launches and repeated project autostarts.
 - React (https://react.dev) — MIT
   Frontend UI library.
 - Vite (https://vite.dev) — MIT

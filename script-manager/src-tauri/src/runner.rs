@@ -320,12 +320,27 @@ pub async fn start_script(
     registry: tauri::State<'_, ScriptRegistry>,
     running: tauri::State<'_, RunningScripts>,
 ) -> Result<(), String> {
+    start_registered_script(id, app, registry, running, false).await
+}
+
+/// Automatic starts skip running processes/services; manual starts retain
+/// the existing duplicate-start feedback.
+pub(crate) async fn start_registered_script(
+    id: String,
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, ScriptRegistry>,
+    running: tauri::State<'_, RunningScripts>,
+    skip_running: bool,
+) -> Result<(), String> {
     let script = crate::scripts::get_scripts(app.clone(), registry)?
         .into_iter()
         .find(|script| script.id == id)
         .ok_or("未知脚本。")?;
 
     if running.0.lock().unwrap().contains_key(&id) {
+        if skip_running {
+            return Ok(());
+        }
         return Err("此脚本已在运行。".into());
     }
     if let Some(config) = &script.monitor {
@@ -335,7 +350,14 @@ pub async fn start_script(
             .await
             .map_err(|error| error.to_string());
         match result {
-            Ok(result) => crate::monitor::accept_start_probe(&app, &id, result)?,
+            Ok(result) => {
+                let already_running = result == crate::monitor::Probe::Open;
+                let accepted = crate::monitor::accept_start_probe(&app, &id, result);
+                if skip_running && already_running {
+                    return Ok(());
+                }
+                accepted?;
+            }
             Err(message) => {
                 crate::monitor::operation_failed(&app, &id, &message);
                 return Err(message);
@@ -346,6 +368,9 @@ pub async fn start_script(
     let mut map = running.0.lock().unwrap();
 
     if map.contains_key(&id) {
+        if skip_running {
+            return Ok(());
+        }
         return Err("此脚本已在运行。".into());
     }
 

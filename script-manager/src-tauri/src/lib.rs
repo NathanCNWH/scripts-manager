@@ -1,3 +1,4 @@
+mod autostart;
 mod monitor;
 mod runner;
 mod scripts;
@@ -112,6 +113,12 @@ fn quit_app(app: tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
@@ -124,6 +131,7 @@ pub fn run() {
             scripts::open_config_file,
             scripts::add_entry,
             scripts::update_entry,
+            scripts::set_script_autostart,
             scripts::add_script,
             scripts::remove_script,
             runner::start_script,
@@ -134,6 +142,7 @@ pub fn run() {
             runner::send_input,
             runner::get_running_scripts,
             monitor::get_script_states,
+            autostart::get_autostart_errors,
             toggle_main,
             quit_app
         ])
@@ -142,12 +151,14 @@ pub fn run() {
             app.manage(scripts::ScriptRegistry(Mutex::new(loaded)));
             app.manage(runner::RunningScripts::default());
             app.manage(monitor::PortStates::default());
+            app.manage(autostart::StartupIssues::default());
 
             if let Some(window) = app.get_webview_window("main") {
                 position_bottom_right(&window);
             }
             setup_tray(app)?;
             monitor::start_worker(app.handle().clone());
+            autostart::start_projects(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
